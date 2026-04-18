@@ -17,7 +17,7 @@ dotenv.config();
 
 // 创建Express应用
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 80;
 
 // 中间件配置
 app.use(cors({
