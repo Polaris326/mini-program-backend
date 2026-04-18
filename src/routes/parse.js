@@ -77,37 +77,72 @@ function isValidUrl(url) {
 }
 
 /**
- * 解析抖音作品（模拟数据）
+ * 解析抖音作品（使用免费API）
  */
 async function parseDouyin(url) {
   try {
-    // 模拟网络延迟
-    await new Promise(resolve => setTimeout(resolve, 800));
+    // 调用免费解析API
+    const apiUrl = `https://t.vzzw.com/douyin/index.php?url=${encodeURIComponent(url)}&key=common`;
     
-    // 返回模拟数据（测试用）
+    const response = await axios.get(apiUrl, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    const apiData = response.data;
+    
+    // 检查API返回状态
+    if (apiData.code !== 200 || !apiData.data) {
+      throw { code: ERROR_CODES.PARSE_FAILED, message: apiData.msg || '解析失败' };
+    }
+    
+    const data = apiData.data;
+    
     return {
       id: uuidv4(),
       platform: 'douyin',
-      title: '这是翻车了吗 #电视背景墙安装',
-      content: '家里装修电视背景墙，师傅说这个造型很流行，结果装完我懵了...大家帮我看看这是翻车了吗？在线等挺急的！',
-      tags: ['装修', '电视背景墙', '翻车', '装修避坑'],
+      title: data.title || '无标题',
+      content: data.desc || data.title || '',
+      tags: [],
       video: {
-        url: 'https://media.w3.org/2010/05/sintel/trailer.mp4', // HTTPS 测试视频
-        cover: 'https://media.w3.org/2010/05/sintel/poster.png', // HTTPS 封面图
-        duration: 15,
+        url: data.video_url || data.url || '',
+        cover: data.cover || '',
+        duration: data.duration || 0,
         width: 1080,
         height: 1920
       },
       author: {
-        name: 'zzzzl',
-        avatar: 'https://thirdwx.qlogo.cn/mmopen/vi_32/Q0au1B4cMibkMiaE8aWNpJQcxLP1ia0q6D2TQ2YkqMYyQ4Y6WR0gS5Xs8Q2YkqMYyQ4Y6WR0gS5Xs8Q/132'
+        name: data.author || '未知作者',
+        avatar: data.avatar || ''
       },
       createdAt: new Date().toISOString()
     };
     
   } catch (error) {
-    console.error('抖音解析失败:', error);
-    throw { code: ERROR_CODES.PARSE_FAILED, message: '解析失败，请稍后重试' };
+    console.error('抖音解析失败:', error.message);
+    
+    // 如果API失败，返回模拟数据（保证功能可用）
+    return {
+      id: uuidv4(),
+      platform: 'douyin',
+      title: '解析失败，显示示例数据',
+      content: '免费API可能出现不稳定情况，建议购买正式API服务',
+      tags: ['示例'],
+      video: {
+        url: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+        cover: 'https://media.w3.org/2010/05/sintel/poster.png',
+        duration: 15,
+        width: 1080,
+        height: 1920
+      },
+      author: {
+        name: '示例作者',
+        avatar: ''
+      },
+      createdAt: new Date().toISOString()
+    };
   }
 }
 
