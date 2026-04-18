@@ -9,7 +9,7 @@ WORKDIR /app
 
 # 复制并安装 Python 依赖
 COPY parser/requirements.txt ./parser/
-RUN pip3 install -r parser/requirements.txt
+RUN pip3 install -r parser/requirements.txt --break-system-packages
 
 # 复制 Python 解析库
 COPY parser ./parser
