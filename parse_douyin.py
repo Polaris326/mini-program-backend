@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 抖音解析脚本 - 供Node.js调用
-用法: python parse_douyin.py <抖音链接>
+用法: python3 parse_douyin.py <抖音链接>
 返回: JSON格式结果
 """
 
@@ -11,7 +11,11 @@ import json
 import os
 
 # 添加parser目录到路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'parser'))
+parser_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'parser')
+sys.path.insert(0, parser_dir)
+
+# 切换工作目录到parser目录（scraper.py需要读取config.ini）
+os.chdir(parser_dir)
 
 from scraper import Scraper
 
