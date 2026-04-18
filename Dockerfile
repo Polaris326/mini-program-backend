@@ -1,10 +1,21 @@
-# 使用 Node.js 20 轻量级镜像
-FROM node:20-alpine
+# 使用 Node.js 20 镜像（包含 Python）
+FROM node:20
+
+# 安装 Python 和 pip
+RUN apt-get update && apt-get install -y python3 python3-pip
 
 # 设置工作目录
 WORKDIR /app
 
-# 先复制 package.json 安装依赖（利用缓存层）
+# 复制并安装 Python 依赖
+COPY parser/requirements.txt ./parser/
+RUN pip3 install -r parser/requirements.txt
+
+# 复制 Python 解析库
+COPY parser ./parser
+COPY parse_douyin.py ./
+
+# 复制 Node.js 依赖
 COPY package*.json ./
 RUN npm install --production
 

@@ -14,6 +14,8 @@ const router = express.Router();
 const axios = require('axios');
 const cheerio = require('cheerio');
 const { v4: uuidv4 } = require('uuid');
+const { exec } = require('child_process');
+const path = require('path');
 
 // 错误码定义
 const ERROR_CODES = {
@@ -77,73 +79,72 @@ function isValidUrl(url) {
 }
 
 /**
- * 解析抖音作品（使用免费API）
+ * 解析抖音作品（使用Python解析库）
  */
 async function parseDouyin(url) {
-  try {
-    // 调用免费解析API
-    const apiUrl = `https://t.vzzw.com/douyin/index.php?url=${encodeURIComponent(url)}&key=common`;
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(__dirname, '../../parse_douyin.py');
+    const command = `python3 "${scriptPath}" "${url}"`;
     
-    const response = await axios.get(apiUrl, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    exec(command, { timeout: 30000 }, (error, stdout, stderr) => {
+      if (error) {
+        console.error('Python解析失败:', error);
+        // 返回模拟数据保证功能可用
+        resolve({
+          id: uuidv4(),
+          platform: 'douyin',
+          title: '解析服务暂不可用',
+          content: 'Python解析服务启动失败，请检查配置',
+          tags: [],
+          video: {
+            url: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+            cover: 'https://media.w3.org/2010/05/sintel/poster.png',
+            duration: 15,
+            width: 1080,
+            height: 1920
+          },
+          author: {
+            name: '示例作者',
+            avatar: ''
+          },
+          createdAt: new Date().toISOString()
+        });
+        return;
+      }
+      
+      try {
+        const result = JSON.parse(stdout);
+        
+        if (result.error) {
+          throw new Error(result.error);
+        }
+        
+        // 转换Python库返回格式为项目格式
+        resolve({
+          id: uuidv4(),
+          platform: 'douyin',
+          title: result.desc || result.title || '无标题',
+          content: result.desc || '',
+          tags: [],
+          video: {
+            url: result.video_url || result.nwm_video_url || '',
+            cover: result.cover_url || result.dynamic_cover || '',
+            duration: result.duration || 0,
+            width: 1080,
+            height: 1920
+          },
+          author: {
+            name: result.nickname || '未知作者',
+            avatar: result.avatar_url || ''
+          },
+          createdAt: new Date().toISOString()
+        });
+      } catch (parseError) {
+        console.error('解析Python输出失败:', parseError);
+        reject({ code: ERROR_CODES.PARSE_FAILED, message: '解析结果格式错误' });
       }
     });
-    
-    const apiData = response.data;
-    
-    // 检查API返回状态
-    if (apiData.code !== 200 || !apiData.data) {
-      throw { code: ERROR_CODES.PARSE_FAILED, message: apiData.msg || '解析失败' };
-    }
-    
-    const data = apiData.data;
-    
-    return {
-      id: uuidv4(),
-      platform: 'douyin',
-      title: data.title || '无标题',
-      content: data.desc || data.title || '',
-      tags: [],
-      video: {
-        url: data.video_url || data.url || '',
-        cover: data.cover || '',
-        duration: data.duration || 0,
-        width: 1080,
-        height: 1920
-      },
-      author: {
-        name: data.author || '未知作者',
-        avatar: data.avatar || ''
-      },
-      createdAt: new Date().toISOString()
-    };
-    
-  } catch (error) {
-    console.error('抖音解析失败:', error.message);
-    
-    // 如果API失败，返回模拟数据（保证功能可用）
-    return {
-      id: uuidv4(),
-      platform: 'douyin',
-      title: '解析失败，显示示例数据',
-      content: '免费API可能出现不稳定情况，建议购买正式API服务',
-      tags: ['示例'],
-      video: {
-        url: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
-        cover: 'https://media.w3.org/2010/05/sintel/poster.png',
-        duration: 15,
-        width: 1080,
-        height: 1920
-      },
-      author: {
-        name: '示例作者',
-        avatar: ''
-      },
-      createdAt: new Date().toISOString()
-    };
-  }
+  });
 }
 
 /**
