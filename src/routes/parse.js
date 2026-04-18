@@ -12,6 +12,12 @@ const router = express.Router();
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 
+// ============ 第三方解析API配置（api.ake999.com）============
+const AKE_API_KEY = process.env.AKE_API_KEY || '324BFEC812CB9874DEACA5137AF2B9E41E9E49E238CEC88C2B';
+const AKE_API_UID = process.env.AKE_API_UID || '202038600';
+const AKE_API_BASE = 'https://api.ake999.com/api/dsp';
+// ============================================================
+
 // 错误码定义
 const ERROR_CODES = {
   SUCCESS: 0,
@@ -20,7 +26,8 @@ const ERROR_CODES = {
   PARSE_FAILED: 1003,
   URL_EXPIRED: 1004,
   REQUEST_FREQUENT: 2001,
-  SERVER_ERROR: 5001
+  SERVER_ERROR: 5001,
+  API_ERROR: 1005  // 第三方API错误
 };
 
 // 平台配置
@@ -28,14 +35,27 @@ const PLATFORMS = {
   douyin: {
     name: '抖音',
     pattern: /douyin\.com/i,
+    akeType: 'douyin',
   },
   kuaishou: {
     name: '快手',
     pattern: /kuaishou\.com/i,
+    akeType: 'kuaishou',
   },
   xiaohongshu: {
     name: '小红书',
     pattern: /xiaohongshu\.com/i,
+    akeType: 'xiaohongshu',
+  },
+  bilibili: {
+    name: '哔哩哔哩',
+    pattern: /bilibili\.com|b23\.tv/i,
+    akeType: 'bilibili',
+  },
+  weibo: {
+    name: '微博',
+    pattern: /weibo\.com/i,
+    akeType: 'weibo',
   }
 };
 
@@ -64,259 +84,109 @@ function isValidUrl(url) {
 }
 
 /**
- * 从抖音分享链接中提取视频ID
+ * 通过第三方API (api.ake999.com) 统一解析
+ * 支持：抖音、快手、小红书、哔哩哔哩、微博等
  */
-function extractDouyinVideoId(url) {
-  // 短链接 v.douyin.com 需要先重定向获取真实链接
-  // 长链接格式: https://www.douyin.com/video/7086770907674348841
-  // 或: https://www.douyin.com/discover?modal_id=7086770907674348841
-  const videoMatch = url.match(/video\/(\d+)/);
-  if (videoMatch) return videoMatch[1];
+async function parseViaAkeApi(url, platform) {
+  const encodedUrl = encodeURIComponent(url);
+  const apiUrl = `${AKE_API_BASE}/${AKE_API_KEY}/${AKE_API_UID}/?url=${encodedUrl}`;
   
-  const modalMatch = url.match(/modal_id=(\d+)/);
-  if (modalMatch) return modalMatch[1];
+  console.log(`[ake999] 解析请求: ${apiUrl.substring(0, 100)}...`);
   
-  const noteMatch = url.match(/note\/(\d+)/);
-  if (noteMatch) return noteMatch[1];
+  const resp = await axios.get(apiUrl, { timeout: 20000 });
+  const result = resp.data;
   
-  return null;
-}
-
-/**
- * 解析抖音作品 - 通过抖音网页API
- */
-async function parseDouyin(url) {
-  const MOBILE_UA = 'Mozilla/5.0 (Linux; Android 8.0; Pixel 2 Build/OPD3.170816.012) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Mobile Safari/537.36';
+  console.log(`[ake999] 响应: code=${result.code}, msg=${result.msg}`);
   
-  let videoId = extractDouyinVideoId(url);
-  let realUrl = url;
-  
-  // 如果没提取到ID，可能是短链接，需要先跟随重定向
-  if (!videoId) {
-    try {
-      const resp = await axios.head(url, {
-        maxRedirects: 5,
-        timeout: 10000,
-        headers: { 'User-Agent': MOBILE_UA }
-      });
-      realUrl = resp.request.res.responseUrl || realUrl;
-      videoId = extractDouyinVideoId(realUrl);
-    } catch (e) {
-      // head可能失败，用get试一下
-      try {
-        const resp = await axios.get(url, {
-          maxRedirects: 5,
-          timeout: 10000,
-          headers: { 'User-Agent': MOBILE_UA },
-          validateStatus: () => true
-        });
-        realUrl = resp.request.res.responseUrl || realUrl;
-        videoId = extractDouyinVideoId(realUrl);
-      } catch (e2) {
-        throw new Error('无法解析链接，请确认链接是否正确');
-      }
-    }
-  }
-  
-  if (!videoId) {
-    throw new Error('无法提取视频ID，请确认链接是否正确');
-  }
-  
-  console.log(`抖音解析: videoId=${videoId}, realUrl=${realUrl}`);
-  
-  // 方法1: 使用抖音Web API
-  try {
-    const apiUrl = `https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=${videoId}`;
-    const resp = await axios.get(apiUrl, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.douyin.com/',
-        'Accept': 'application/json, text/plain, */*',
-      },
-      validateStatus: () => true,
-    });
+  // code 200 = 成功
+  if (result.code === 200) {
+    const d = result.data;
+    const isAlbum = result.type == 2; // type=1视频 type=2图集
     
-    if (resp.data && resp.data.aweme_detail) {
-      return transformDouyinData(resp.data.aweme_detail);
+    if (isAlbum) {
+      // 图集
+      return {
+        id: uuidv4(),
+        platform: platform,
+        title: d.title || '无标题',
+        content: d.title || '',
+        tags: [],
+        video: {
+          url: '',
+          cover: d.cover || d.download_image || '',
+          duration: 0,
+          width: 0,
+          height: 0,
+          images: d.images ? d.images.map(img => ({ url: img })) : []
+        },
+        author: { name: '', avatar: '' },
+        createdAt: new Date().toISOString()
+      };
+    } else {
+      // 视频
+      return {
+        id: uuidv4(),
+        platform: platform,
+        title: d.title || '无标题',
+        content: d.title || '',
+        tags: [],
+        video: {
+          url: d.down || d.url || '',   // down=无水印下载链接
+          cover: d.cover || d.download_image || '',
+          duration: 0,
+          width: 0,
+          height: 0,
+        },
+        author: { name: '', avatar: '' },
+        createdAt: new Date().toISOString()
+      };
     }
-  } catch (e) {
-    console.log('方法1(Web API)失败:', e.message);
   }
   
-  // 方法2: 使用 iesdouyin API
-  try {
-    const apiUrl = `https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids=${videoId}`;
-    const resp = await axios.get(apiUrl, {
-      timeout: 15000,
-      headers: { 'User-Agent': MOBILE_UA },
-      validateStatus: () => true,
-    });
-    
-    if (resp.data && resp.data.item_list && resp.data.item_list.length > 0) {
-      const item = resp.data.item_list[0];
-      return transformDouyinData(item);
-    }
-  } catch (e) {
-    console.log('方法2(iesdouyin)失败:', e.message);
-  }
-  
-  // 方法3: 解析网页HTML
-  try {
-    const webUrl = `https://www.douyin.com/video/${videoId}`;
-    const resp = await axios.get(webUrl, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.douyin.com/',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-      validateStatus: () => true,
-    });
-    
-    // 尝试从HTML中提取RENDER_DATA
-    const renderMatch = resp.data.match(/id="RENDER_DATA"[^>]*value="([^"]+)"/);
-    if (renderMatch) {
-      const renderData = JSON.parse(decodeURIComponent(renderMatch[1]));
-      // 遍历找到aweme detail
-      for (const key of Object.keys(renderData)) {
-        if (renderData[key] && renderData[key].awemeDetail) {
-          return transformDouyinData(renderData[key].awemeDetail);
-        }
-      }
-    }
-  } catch (e) {
-    console.log('方法3(HTML解析)失败:', e.message);
-  }
-  
-  throw new Error('解析失败，该视频可能已删除或链接已过期');
-}
-
-/**
- * 转换抖音API数据为项目格式
- */
-function transformDouyinData(data) {
-  // 提取视频信息
-  const video = data.video || {};
-  const author = data.author || {};
-  const statistics = data.statistics || {};
-  
-  // 视频地址 - 优先无水印
-  let videoUrl = '';
-  if (video.play_addr) {
-    videoUrl = video.play_addr.url_list && video.play_addr.url_list[0]
-      ? video.play_addr.url_list[0].replace('playwm', 'play')
-      : video.play_addr.uri ? `https://www.douyin.com/aweme/v1/play/?video_id=${video.play_addr.uri}&line=0` : '';
-  }
-  if (video.download_addr && video.download_addr.url_list) {
-    videoUrl = video.download_addr.url_list[0];
-  }
-  
-  // 封面
-  let coverUrl = '';
-  if (video.cover) {
-    coverUrl = video.cover.url_list ? video.cover.url_list[0] : '';
-  }
-  if (video.origin_cover) {
-    coverUrl = video.origin_cover.url_list ? video.origin_cover.url_list[0] : coverUrl;
-  }
-  if (video.dynamic_cover) {
-    coverUrl = video.dynamic_cover.url_list ? video.dynamic_cover.url_list[0] : coverUrl;
-  }
-  
-  // 判断是图集还是视频
-  const images = data.images;
-  const isAlbum = images && images.length > 0;
-  
-  // 作者信息
-  const authorName = author.nickname || author.unique_id || '未知作者';
-  const authorAvatar = author.avatar_larger && author.avatar_larger.url_list 
-    ? author.avatar_larger.url_list[0] 
-    : (author.avatar_medium && author.avatar_medium.url_list ? author.avatar_medium.url_list[0] : '');
-  
-  return {
-    id: data.aweme_id || data.aweme_id_str || uuidv4(),
-    platform: 'douyin',
-    title: data.desc || '无标题',
-    content: data.desc || '',
-    tags: [],
-    video: isAlbum ? {
-      url: '',
-      cover: coverUrl,
-      duration: 0,
-      width: 0,
-      height: 0,
-      images: images.map(img => ({
-        url: img.url_list ? img.url_list[0] : '',
-      }))
-    } : {
-      url: videoUrl,
-      cover: coverUrl,
-      duration: video.duration || 0,
-      width: video.width || 1080,
-      height: video.height || 1920,
-    },
-    author: {
-      name: authorName,
-      avatar: authorAvatar,
-    },
-    statistics: {
-      likes: statistics.digg_count || 0,
-      comments: statistics.comment_count || 0,
-      shares: statistics.share_count || 0,
-    },
-    createdAt: data.create_time ? new Date(data.create_time * 1000).toISOString() : new Date().toISOString()
+  // 错误处理
+  const errorMap = {
+    101: '解析失败，请稍后重试',
+    102: '解析失败，请检查链接是否正确或视频是否已删除',
+    103: '链接格式不正确',
+    104: '接口不存在或已暂停',
+    107: '数据解析异常',
+    110: '解析次数已用完，请明天再试',
+    113: '解析失败，请稍后重试',
+    155: 'API Key或UID配置错误，请联系管理员',
   };
+  
+  const msg = errorMap[result.code] || `解析失败(code:${result.code})`;
+  const err = new Error(msg);
+  err.code = result.code;
+  throw err;
 }
 
 /**
- * 解析快手作品（模拟数据）
+ * 解析快手作品
  */
 async function parseKuaishou(url) {
-  return {
-    id: uuidv4(),
-    platform: 'kuaishou',
-    title: '快手测试视频 #日常分享',
-    content: '这是一个快手的测试视频内容，用于测试解析功能是否正常工作。',
-    tags: ['快手', '测试', '日常'],
-    video: {
-      url: 'https://www.w3schools.com/html/mov_bbb.mp4',
-      cover: 'https://media.w3.org/2010/05/sintel/poster.png',
-      duration: 10,
-      width: 320,
-      height: 176
-    },
-    author: {
-      name: '快手用户',
-      avatar: ''
-    },
-    createdAt: new Date().toISOString()
-  };
+  return parseViaAkeApi(url, 'kuaishou');
 }
 
 /**
- * 解析小红书作品（模拟数据）
+ * 解析小红书作品
  */
 async function parseXiaohongshu(url) {
-  return {
-    id: uuidv4(),
-    platform: 'xiaohongshu',
-    title: '小红书测试笔记 #生活记录',
-    content: '这是一篇小红书的测试笔记内容，用于测试解析功能是否正常工作。',
-    tags: ['小红书', '生活', '记录', '测试'],
-    video: {
-      url: 'https://www.w3schools.com/html/mov_bbb.mp4',
-      cover: 'https://media.w3.org/2010/05/sintel/poster.png',
-      duration: 20,
-      width: 320,
-      height: 176
-    },
-    author: {
-      name: '小红书博主',
-      avatar: ''
-    },
-    createdAt: new Date().toISOString()
-  };
+  return parseViaAkeApi(url, 'xiaohongshu');
+}
+
+/**
+ * 解析B站作品
+ */
+async function parseBilibili(url) {
+  return parseViaAkeApi(url, 'bilibili');
+}
+
+/**
+ * 解析微博作品
+ */
+async function parseWeibo(url) {
+  return parseViaAkeApi(url, 'weibo');
 }
 
 /**
@@ -337,19 +207,25 @@ router.post('/', async (req, res) => {
     
     const platform = detectPlatform(url);
     if (!platform) {
-      return res.json({ code: ERROR_CODES.UNSUPPORTED_PLATFORM, message: '暂不支持该平台，仅支持抖音、快手、小红书' });
+      return res.json({ code: ERROR_CODES.UNSUPPORTED_PLATFORM, message: '暂不支持该平台' });
     }
     
     let result;
     switch (platform) {
       case 'douyin':
-        result = await parseDouyin(url);
+        result = await parseViaAkeApi(url, 'douyin');
         break;
       case 'kuaishou':
         result = await parseKuaishou(url);
         break;
       case 'xiaohongshu':
         result = await parseXiaohongshu(url);
+        break;
+      case 'bilibili':
+        result = await parseBilibili(url);
+        break;
+      case 'weibo':
+        result = await parseWeibo(url);
         break;
       default:
         return res.json({ code: ERROR_CODES.UNSUPPORTED_PLATFORM, message: '暂不支持该平台' });
