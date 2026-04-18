@@ -98,8 +98,8 @@ async function parseViaAkeApi(url, platform) {
   
   console.log(`[ake999] 响应: code=${result.code}, msg=${result.msg}`);
   
-  // code 200 = 成功
-  if (result.code === 200) {
+  // code 200 = 成功（用 == 兼容字符串/数字）
+  if (result.code == 200) {
     const d = result.data;
     const isAlbum = result.type == 2; // type=1视频 type=2图集
     
@@ -155,7 +155,7 @@ async function parseViaAkeApi(url, platform) {
     155: 'API Key或UID配置错误，请联系管理员',
   };
   
-  const msg = errorMap[result.code] || `解析失败(code:${result.code})`;
+  const msg = errorMap[result.code] || errorMap[Number(result.code)] || `解析失败(code:${result.code})`;
   const err = new Error(msg);
   err.code = result.code;
   throw err;
